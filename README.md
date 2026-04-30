@@ -2,7 +2,7 @@
 
 多用户水电费查询系统，支持自动爬取公寓管理系统数据、数据可视化、余额不足提醒。
 
-演示地址：https://qh.qiyork.icu
+演示地址：https://qinghang-utility-production.up.railway.app/
 
 ## 功能特性
 
