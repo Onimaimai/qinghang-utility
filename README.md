@@ -12,6 +12,11 @@
 - ECharts图表可视化
 - PushPlus微信余额不足提醒
 
+<img width="353" height="720" alt="lQDPKIMNqH6n8aHNCjPNBQCwv5ue9UZ14IcJyLX3xC6tAA_1280_2611 jpg_720x720" src="https://github.com/user-attachments/assets/e29e78c7-67e8-4546-87e9-27242683e54d" />
+<img width="353" height="720" alt="lQDPKG7U0ISD86HNCjTNBQCwVl0X6ERyC1wJyLX4yNsvAA_1280_2612 jpg_720x720" src="https://github.com/user-attachments/assets/5fb6813b-b6fc-43e3-a4e3-d1b29f52b7cc" />
+<img width="353" height="720" alt="lQDPJxXCgO4gY6HNCjPNBQCwuPQTLAO1tJQJyLX5xo6HAA_1280_2611 jpg_720x720" src="https://github.com/user-attachments/assets/37fdd740-f319-4ba0-828c-6567e1ae9f2d" />
+
+
 ## 技术栈
 
 - 后端: FastAPI + SQLite + Playwright
