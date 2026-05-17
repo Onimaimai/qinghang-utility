@@ -47,7 +47,8 @@ def send_balance_alert(token: str, alerts: List[Dict]) -> bool:
 
     content += """
     </table>
-    <p>请登录公寓管理系统及时充值，以免影响正常使用。</p>
+    <p>请及时充值，以免影响正常使用。</p>
+    <p><a href="https://pmsnm.zj-xzh.com/home">点击这里登录公寓管理系统</a></p>
     """
 
     try:
