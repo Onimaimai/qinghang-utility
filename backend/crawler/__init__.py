@@ -103,6 +103,156 @@ class PMSCrawler:
             print(f"切换用户模式异常: {e}")
             return False
 
+    @staticmethod
+    def _normalize_text(text: Optional[str]) -> str:
+        return re.sub(r'\s+', ' ', text or '').strip()
+
+    @staticmethod
+    def _format_pms_datetime(value: str) -> str:
+        value = (value or "").strip()
+        match = re.match(r'(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::\d{1,2})?)?$', value)
+        if match:
+            year, month, day, hour, minute = match.groups()
+            return f"{year}年{int(month):02d}月{int(day):02d}日 {int(hour or 0):02d}:{int(minute or 0):02d}"
+        return value
+
+    @staticmethod
+    def _extract_amount(text: str, default_sign: str = "") -> Optional[str]:
+        compact = re.sub(r'\s+', '', text or '')
+        match = re.search(r'([+-])?(\d+(?:\.\d+)?)\s*元', compact)
+        if not match:
+            return None
+        sign = match.group(1) or default_sign
+        return f"{sign}{match.group(2)}"
+
+    @staticmethod
+    def _extract_number(text: str) -> Optional[str]:
+        match = re.search(r'(\d+(?:\.\d+)?)', text or '')
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _parse_details_from_text(page_text: str) -> List[Dict[str, Any]]:
+        details = []
+
+        deduct_pattern = r'(\d+-\d+)扣费\s*\n\s*(\S+)\s*\n\s*-\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
+        for match in re.findall(deduct_pattern, page_text):
+            details.append({
+                "room": match[0],
+                "type": match[1],
+                "amount": f"-{match[2]}",
+                "date": match[3],
+                "balance": match[4]
+            })
+
+        recharge_pattern = r'(线上能源充值|充值)\s*\n\s*\+\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
+        for match in re.findall(recharge_pattern, page_text):
+            details.append({
+                "room": "-",
+                "type": match[0],
+                "amount": f"+{match[1]}",
+                "date": match[2],
+                "balance": match[3]
+            })
+
+        return details
+
+    async def _parse_details_from_page(self) -> List[Dict[str, Any]]:
+        details = []
+
+        try:
+            await self.page.wait_for_selector('.grop', timeout=10000)
+        except Exception:
+            pass
+
+        for item in await self.page.query_selector_all('.grop'):
+            name_el = await item.query_selector('.name')
+            money_el = await item.query_selector('.money')
+            info_el = await item.query_selector('.gropp')
+
+            if not name_el or not money_el or not info_el:
+                continue
+
+            name = self._normalize_text(await name_el.inner_text())
+            consume_type_el = await item.query_selector('.consume-type')
+            consume_type = self._normalize_text(await consume_type_el.inner_text()) if consume_type_el else ""
+            money_text = await money_el.inner_text()
+            info_text = self._normalize_text(await info_el.inner_text())
+
+            room_match = re.search(r'(\d+-\d+)', name)
+            date_match = re.search(r'流水时间[：:]\s*(\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{1,2}(?::\d{1,2})?)', info_text)
+            balance_match = re.search(r'余额[：:]\s*(\d+(?:\.\d+)?)\s*元', info_text)
+            default_sign = "+" if "充值" in name else "-"
+            amount = self._extract_amount(money_text, default_sign)
+
+            if not date_match or not balance_match or not amount:
+                continue
+
+            details.append({
+                "room": room_match.group(1) if room_match else "-",
+                "type": consume_type or name,
+                "amount": amount,
+                "date": self._format_pms_datetime(date_match.group(1)),
+                "balance": balance_match.group(1)
+            })
+
+        if details:
+            return details
+
+        page_text = await self.page.inner_text('body')
+        return self._parse_details_from_text(page_text)
+
+    @staticmethod
+    def _parse_energy_from_text(page_text: str) -> List[Dict[str, Any]]:
+        energy_records = []
+        pattern = r'(电表-\d+)\s*\n\s*(\d+\.?\d*)kW·h\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*(\d+\.?\d*)元'
+        for match in re.findall(pattern, page_text):
+            energy_records.append({
+                "meter": match[0],
+                "usage": match[1],
+                "date": match[2],
+                "amount": match[3]
+            })
+        return energy_records
+
+    async def _parse_energy_from_page(self) -> List[Dict[str, Any]]:
+        energy_records = []
+
+        try:
+            await self.page.wait_for_selector('.grop', timeout=10000)
+        except Exception:
+            pass
+
+        for item in await self.page.query_selector_all('.grop'):
+            name_el = await item.query_selector('.name')
+            usage_el = await item.query_selector('.money')
+            info_el = await item.query_selector('.gropp')
+            fee_el = await item.query_selector('.fee')
+
+            if not name_el or not usage_el or not info_el or not fee_el:
+                continue
+
+            meter = self._normalize_text(await name_el.inner_text())
+            usage = self._extract_number(await usage_el.inner_text())
+            info_text = self._normalize_text(await info_el.inner_text())
+            amount = self._extract_number(await fee_el.inner_text())
+            date_match = re.search(r'用[电水]日期[：:]\s*(\d{4}-\d{1,2}-\d{1,2})', info_text)
+
+            if not meter or not usage or not amount or not date_match:
+                continue
+
+            energy_records.append({
+                "meter": meter,
+                "usage": usage,
+                "date": self._format_pms_datetime(date_match.group(1)),
+                "amount": amount
+            })
+
+        if energy_records:
+            return energy_records
+
+        page_text = await self.page.inner_text('body')
+        return self._parse_energy_from_text(page_text)
+
     async def get_balance(self, username: str, password: str, mode: str = "electricity") -> Optional[Dict[str, Any]]:
         """
         获取水电费余额
@@ -174,42 +324,7 @@ class PMSCrawler:
             await self.page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            page_text = await self.page.inner_text('body')
-
-            # 解析明细数据
-            # 格式1(扣费): 房间号扣费\n类型\n- 金额\n时间\n余额:xxx元
-            # 格式2(充值): 充值类型\n+ 金额\n时间\n余额:xxx元 (无房间号)
-            details = []
-
-            # 先尝试匹配扣费记录（有房间号）
-            # 扣费: -金额元
-            deduct_pattern = r'(\d+-\d+)扣费\s*\n\s*(\S+)\s*\n\s*-\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
-            deduct_matches = re.findall(deduct_pattern, page_text)
-
-            for match in deduct_matches:
-                details.append({
-                    "room": match[0],
-                    "type": match[1],
-                    "amount": f"-{match[2]}",
-                    "date": match[3],
-                    "balance": match[4]
-                })
-
-            # 再匹配充值记录（无房间号，类型直接是"线上能源充值"等）
-            # 充值: +金额元
-            recharge_pattern = r'(线上能源充值|充值)\s*\n\s*\+\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
-            recharge_matches = re.findall(recharge_pattern, page_text)
-
-            for match in recharge_matches:
-                details.append({
-                    "room": "-",  # 充值记录无房间号
-                    "type": match[0],
-                    "amount": f"+{match[1]}",
-                    "date": match[2],
-                    "balance": match[3]
-                })
-
-            return details
+            return await self._parse_details_from_page()
 
         except Exception as e:
             print(f"获取明细异常: {e}")
@@ -245,27 +360,7 @@ class PMSCrawler:
             await self.page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            page_text = await self.page.inner_text('body')
-
-            # 解析能耗数据
-            # 格式: 电表-编号\n用电量\n时间\n金额
-            # 注意：水费模式下页面显示的仍是"电表"和"kW·h"，但实际是水表和吨
-            energy_records = []
-
-            # 使用正则解析每条记录
-            pattern = r'(电表-\d+)\s*\n\s*(\d+\.?\d*)kW·h\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*(\d+\.?\d*)元'
-            matches = re.findall(pattern, page_text)
-
-            for match in matches:
-                record = {
-                    "meter": match[0],
-                    "usage": match[1],  # 电费模式下是用电量(kW·h)，水费模式下是用水量(吨)
-                    "date": match[2],
-                    "amount": match[3]
-                }
-                energy_records.append(record)
-
-            return energy_records
+            return await self._parse_energy_from_page()
 
         except Exception as e:
             print(f"获取能耗记录异常: {e}")
@@ -306,34 +401,7 @@ class PMSCrawler:
             await self.page.wait_for_load_state("networkidle", timeout=30000)
             await asyncio.sleep(1)
 
-            page_text = await self.page.inner_text('body')
-            details = []
-
-            deduct_pattern = r'(\d+-\d+)扣费\s*\n\s*(\S+)\s*\n\s*-\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
-            deduct_matches = re.findall(deduct_pattern, page_text)
-
-            for match in deduct_matches:
-                details.append({
-                    "room": match[0],
-                    "type": match[1],
-                    "amount": f"-{match[2]}",
-                    "date": match[3],
-                    "balance": match[4]
-                })
-
-            recharge_pattern = r'(线上能源充值|充值)\s*\n\s*\+\s*(\d+\.?\d*)元\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*余额[：:](\d+\.?\d*)元'
-            recharge_matches = re.findall(recharge_pattern, page_text)
-
-            for match in recharge_matches:
-                details.append({
-                    "room": "-",
-                    "type": match[0],
-                    "amount": f"+{match[1]}",
-                    "date": match[2],
-                    "balance": match[3]
-                })
-
-            return details
+            return await self._parse_details_from_page()
         except asyncio.TimeoutError:
             print("获取明细超时")
             return None
@@ -348,21 +416,7 @@ class PMSCrawler:
             await self.page.wait_for_load_state("networkidle", timeout=30000)
             await asyncio.sleep(1)
 
-            page_text = await self.page.inner_text('body')
-            energy_records = []
-
-            pattern = r'(电表-\d+)\s*\n\s*(\d+\.?\d*)kW·h\s*\n\s*(\d+年\d+月\d+日\s*\d+:\d+)\s*\n\s*(\d+\.?\d*)元'
-            matches = re.findall(pattern, page_text)
-
-            for match in matches:
-                energy_records.append({
-                    "meter": match[0],
-                    "usage": match[1],
-                    "date": match[2],
-                    "amount": match[3]
-                })
-
-            return energy_records
+            return await self._parse_energy_from_page()
         except asyncio.TimeoutError:
             print("获取能耗记录超时")
             return None
